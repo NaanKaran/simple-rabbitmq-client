@@ -1,0 +1,27 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Directory for instrumented libs and coverage
+coverage/
+
+# Dependency directories
+node_modules/
+
+# Environment files
+.env
+
+# Editor files
+.vscode/
+.idea/
+
+# Build files
+dist/
+build/
