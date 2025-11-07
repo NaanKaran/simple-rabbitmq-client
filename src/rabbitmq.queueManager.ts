@@ -1,14 +1,18 @@
 import amqplib, { Channel, Options, ChannelModel } from "amqplib";
+import { EventEmitter } from 'events';
 import { RabbitMqConfig } from "./rabbitmq.config";
 
-export class QueueManager {
+export class QueueManager extends EventEmitter {
   private readonly connections: Map<
     string,
     { model: ChannelModel; channel: Channel }
   > = new Map();
   private readonly reconnecting: Set<string> = new Set();
   private readonly config: Required<RabbitMqConfig>;
+  
   constructor(config: RabbitMqConfig) {
+    super();
+    
     if (!config.url) throw new Error("RabbitMQ URL is required.");
     
     // Set default configuration
@@ -63,11 +67,13 @@ export class QueueManager {
     // Listen for connection close
     connection.on("close", () => {
       console.error(`🔌 Connection closed for queue: ${queueName}`);
+      this.emit('close', { queueName });
       this.handleReconnect(queueName);
     });
 
     connection.on("error", (err: Error) => {
       console.error(`❌ Connection error on queue: ${queueName}`, err);
+      this.emit('error', err);
     });
 
     // Listen for channel close
@@ -78,6 +84,7 @@ export class QueueManager {
 
     channel.on("error", (err: Error) => {
       console.warn(`⚠️ Channel error for queue: ${queueName}`, err);
+      this.emit('error', err);
     });
 
     return { model, channel };

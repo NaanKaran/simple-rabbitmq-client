@@ -5,6 +5,7 @@ A lightweight TypeScript library for managing RabbitMQ connections, queues, prod
 
 ## **Features**
 
+- **Simple API**: Easy-to-use Connection class with event-driven interface
 - **Easy Setup**: Simple initialization with comprehensive configuration options
 - **Reliable Connections**: Automatic reconnection with configurable retry attempts and delays
 - **Robust Error Handling**: Built-in retry mechanisms with dead letter queue support
@@ -26,23 +27,140 @@ Install the package via NPM:
 npm install rabbitmq-connect-helper
 ```
 
+## **Simplified API**
+
+The library provides a simple Connection class with Consumer and Publisher instances for professional RabbitMQ usage:
+
+```typescript
+import { Connection } from 'rabbitmq-connect-helper';
+
+// Initialize:
+const rabbit = new Connection('amqp://guest:guest@localhost:5672')
+rabbit.on('error', (err) => {
+  console.log('RabbitMQ connection error', err)
+})
+rabbit.on('connection', () => {
+  console.log('Connection successfully (re)established')
+})
+
+// Create a consumer with advanced options
+const sub = await rabbit.createConsumer({
+  queue: 'user-events',
+  queueOptions: {durable: true},
+  // handle 2 messages at a time
+  qos: {prefetchCount: 2},
+  // Optionally ensure an exchange exists
+  exchanges: [{exchange: 'my-events', type: 'topic'}],
+  // With a "topic" exchange, messages matching this pattern are routed to the queue
+  queueBindings: [{exchange: 'my-events', routingKey: 'users.*'}],
+}, async (msg) => {
+  console.log('received message (user-events)', msg)
+  // The message is automatically acknowledged (BasicAck) when this function ends.
+  // If this function throws an error, then msg is rejected (BasicNack) and
+  // possibly requeued or sent to a dead-letter exchange. You can also return a
+  // status code from this callback to control the ack/nack behavior
+  // per-message.
+})
+
+sub.on('error', (err) => {
+  // Maybe the consumer was cancelled, or the connection was reset before a
+  // message could be acknowledged.
+  console.log('consumer error (user-events)', err)
+})
+
+// Declare a publisher
+// See API docs for all options
+const pub = await rabbit.createPublisher({
+  // Enable publish confirmations, similar to consumer acknowledgements
+  confirm: true,
+  // Enable retries
+  maxAttempts: 2,
+  // Optionally ensure the existence of an exchange before we use it
+  exchanges: [{exchange: 'my-events', type: 'topic'}]
+})
+
+// Publish a message to a custom exchange
+await pub.send(
+  {exchange: 'my-events', routingKey: 'users.visit'}, // metadata
+  {id: 1, name: 'Alan Turing'}) // message content
+
+// Or publish directly to a queue
+await pub.send('user-events', {id: 1, name: 'Alan Turing'})
+
+// Clean up when you receive a shutdown signal
+async function onShutdown() {
+  // Waits for pending confirmations and closes the underlying Channel
+  await pub.close()
+  // Stop consuming. Wait for any pending message handlers to settle.
+  await sub.close()
+  await rabbit.close()
+}
+process.on('SIGINT', onShutdown)
+process.on('SIGTERM', onShutdown)
+```
+
 ## **Getting Started**
 
-### Basic Setup
-
-First, install the package:
+### Install the package:
 
 ```bash
 npm install rabbitmq-connect-helper
 ```
 
-Then import and use in your application:
+### Simple Connection API
+
+The library provides a simple Connection class for easy RabbitMQ integration:
+
+```typescript
+import { Connection } from 'rabbitmq-connect-helper';
+
+// Initialize:
+const rabbit = new Connection('amqp://guest:guest@localhost:5672')
+rabbit.on('error', (err) => {
+  console.log('RabbitMQ connection error', err)
+})
+rabbit.on('connection', () => {
+  console.log('Connection successfully (re)established')
+})
+
+// Consume messages from a queue:
+// See API docs for all options
+const stop = await rabbit.createConsumer({
+  queue: 'my-queue',
+  handler: async (msg, ack, retry) => {
+    console.log('Received:', msg.content.toString())
+    ack() // acknowledge the message
+  },
+  prefetch: 1,
+  retryAttempts: 3,
+  retryDelayMs: 5000
+})
+
+// Send a message:
+const send = await rabbit.createProducer({ queue: 'my-queue' })
+const success = await send({ hello: 'world' })
+
+// Publish to exchange:
+await rabbit.sendToExchange('my-exchange', 'routing.key', { hello: 'world' })
+
+// Queue and exchange declarations:
+await rabbit.queueDeclare('my-queue', { durable: true })
+await rabbit.exchangeDeclare('my-exchange', 'topic', { durable: true })
+await rabbit.queueBind('my-queue', 'my-exchange', 'routing.key')
+
+// Close connection when done:
+await rabbit.close()
+```
+
+### Advanced Configuration
+
+For more control, you can still use the individual classes:
 
 ```typescript
 import { QueueManager, RabbitMQProducer, RabbitMQConsumer, RabbitMqConfig } from "rabbitmq-connect-helper";
 ```
 
-### 🔌 Initialize QueueManager
+#### 🔌 Initialize QueueManager
 
 ```typescript
 import { QueueManager, RabbitMqConfig } from 'rabbitmq-connect-helper';

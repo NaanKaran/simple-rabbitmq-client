@@ -5,3 +5,4 @@ export { RabbitMQManager, QueueDeclarationOptions, ExchangeDeclarationOptions, Q
 export { RabbitMQRPCClient, RPCOptions, RPCResponse, RPCRequest } from "./rabbitmq.rpc.client";
 export { RabbitMQRPCServer, RPCRequestHandler, RPCServerOptions } from "./rabbitmq.rpc.server";
 export { RabbitMqConfig } from "./rabbitmq.config";
+export { Connection, Consumer, Publisher, EnhancedConsumerOptions, EnhancedConsumerOptionsBase, EnhancedPublisherOptions, MessageMetadata } from "./connection";
