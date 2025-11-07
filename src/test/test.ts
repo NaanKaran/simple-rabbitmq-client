@@ -1,4 +1,4 @@
-import { QueueManager } from "../rabbitmq.queuemager";
+import { QueueManager } from "../rabbitmq.queueManager";
 import { RabbitMQConsumer } from "../rabbitmq.consumer";
 import { RabbitMQProducer } from "../rabbitmq.producer";
 import mockAmqplib from "amqplib";
@@ -15,7 +15,7 @@ describe("QueueManager", () => {
   let producer: RabbitMQProducer;
 
   beforeEach(() => {
-    queueManager = new QueueManager(rabbitMqUrl);
+    queueManager = new QueueManager({url: rabbitMqUrl});
     consumer = new RabbitMQConsumer(queueManager);
     producer = new RabbitMQProducer(queueManager);
   });

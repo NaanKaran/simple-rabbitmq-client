@@ -1,12 +1,18 @@
 import { Channel, ConsumeMessage, Options } from "amqplib";
-import { QueueManager } from "./rabbitmq.queuemager";
+import { QueueManager } from "./rabbitmq.queueManager";
 
-interface ConsumerOptions {
+export interface ConsumerOptions {
   prefetch?: number;
   consumerOptions?: Options.Consume;
   retryAttempts?: number;
   retryDelayMs?: number;
   deadLetterQueueSuffix?: string;
+  errorHandler?: (
+    error: Error,
+    queueName: string,
+    msg: ConsumeMessage | null
+  ) => void;
+  processingTimeout?: number; // Timeout for message processing in ms
 }
 
 interface QueueMetrics {
@@ -37,7 +43,9 @@ export class RabbitMQConsumer {
       consumerOptions = {},
       retryAttempts = 3,
       retryDelayMs = 180000,
-      deadLetterQueueSuffix = ".DLQ",
+      deadLetterQueueSuffix = ".dlq",
+      errorHandler,
+      processingTimeout = 30000, // 30 seconds default timeout
     } = options;
 
     const setupConsumer = async () => {
@@ -53,7 +61,9 @@ export class RabbitMQConsumer {
           onMessage,
           retryAttempts,
           retryDelayMs,
-          deadLetterQueueSuffix
+          deadLetterQueueSuffix,
+          errorHandler,
+          processingTimeout
         );
 
         const { consumerTag } = await channel.consume(
@@ -83,7 +93,7 @@ export class RabbitMQConsumer {
           );
         });
 
-        channel.on("error", (err) => {
+        channel.on("error", (err: Error) => {
           console.error(`Channel error on ${queueName}:`, err);
         });
 
@@ -93,6 +103,13 @@ export class RabbitMQConsumer {
           `Error setting up consumer for ${queueName}, retrying in ${retryDelayMs}ms`,
           err
         );
+        if (errorHandler) {
+          errorHandler(
+            err instanceof Error ? err : new Error(String(err)),
+            queueName,
+            null
+          );
+        }
         setTimeout(setupConsumer, retryDelayMs);
       }
     };
@@ -110,7 +127,13 @@ export class RabbitMQConsumer {
     ) => Promise<void>,
     retryAttempts: number,
     retryDelayMs: number,
-    deadLetterQueueSuffix: string
+    deadLetterQueueSuffix: string,
+    errorHandler?: (
+      error: Error,
+      queueName: string,
+      msg: ConsumeMessage | null
+    ) => void,
+    processingTimeout: number = 30000
   ) {
     return (msg: ConsumeMessage | null) => {
       if (!msg || this.pausedQueues.has(queueName)) return;
@@ -121,7 +144,11 @@ export class RabbitMQConsumer {
           this.metrics[queueName].ack++;
           this.messageAttempts.delete(msg);
         } catch (err) {
-          console.warn(`Ack failed for ${queueName}:`, err);
+          const error = err instanceof Error ? err : new Error(String(err));
+          console.warn(`Ack failed for ${queueName}:`, error);
+          if (errorHandler) {
+            errorHandler(error, queueName, msg);
+          }
         }
       };
 
@@ -139,24 +166,106 @@ export class RabbitMQConsumer {
                 onMessage,
                 retryAttempts,
                 retryDelayMs,
-                deadLetterQueueSuffix
+                deadLetterQueueSuffix,
+                errorHandler,
+                processingTimeout
               )(msg),
             retryDelayMs
           );
         } else {
-          await this.moveToDLQ(queueName, msg, deadLetterQueueSuffix);
-          ack();
+          this.metrics[queueName].errors++;
+          console.error(
+            `Message moved to DLQ after ${retryAttempts} attempts: ${queueName}`
+          );
+          this.moveToDLQ(queueName, msg, deadLetterQueueSuffix).catch((err) => {
+            console.error(
+              `Failed to move message to DLQ for ${queueName}:`,
+              err
+            );
+            if (errorHandler) {
+              errorHandler(
+                err instanceof Error ? err : new Error(String(err)),
+                queueName,
+                msg
+              );
+            }
+            // Still ack the message to prevent it from being retried indefinitely
+            ack();
+          });
         }
       };
 
-      (async () => {
+      // Function to process the message with timeout
+      const processMessage = async () => {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `Message processing timeout after ${processingTimeout}ms`
+                )
+              ),
+            processingTimeout
+          );
+        });
+
         try {
-          await onMessage(msg, ack, retry);
+          // Run the message processing with a race condition against the timeout
+          await Promise.race([onMessage(msg, ack, retry), timeoutPromise]);
+          // If we get here, the processing completed successfully
+          ack();
         } catch (err) {
-          console.error(`Processing error in ${queueName}:`, err);
-          await retry();
+          const error = err instanceof Error ? err : new Error(String(err));
+          console.error(`Processing error in ${queueName}:`, error);
+
+          if (errorHandler) {
+            errorHandler(error, queueName, msg);
+          }
+
+          // Only retry if it's not a timeout error
+          if (error.message.includes("timeout")) {
+            // For timeout errors, move directly to DLQ without more retries
+            this.metrics[queueName].errors++;
+            this.moveToDLQ(queueName, msg, deadLetterQueueSuffix).catch(
+              (dlqErr) => {
+                console.error(
+                  `Failed to move message to DLQ for ${queueName}:`,
+                  dlqErr
+                );
+                if (errorHandler) {
+                  errorHandler(
+                    dlqErr instanceof Error
+                      ? dlqErr
+                      : new Error(String(dlqErr)),
+                    queueName,
+                    msg
+                  );
+                }
+              }
+            );
+          } else {
+            await retry();
+          }
         }
-      })();
+      };
+
+      processMessage().catch((err) => {
+        console.error(
+          `Unexpected error processing message in ${queueName}:`,
+          err
+        );
+        if (errorHandler) {
+          errorHandler(
+            err instanceof Error ? err : new Error(String(err)),
+            queueName,
+            msg
+          );
+        }
+        // In case of unexpected errors in the processMessage function, retry
+        retry().catch((retryErr) => {
+          console.error(`Error during retry for ${queueName}:`, retryErr);
+        });
+      });
     };
   }
 

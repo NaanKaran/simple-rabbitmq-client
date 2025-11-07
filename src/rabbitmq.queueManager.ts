@@ -1,4 +1,5 @@
 import amqplib, { Channel, Options, ChannelModel } from "amqplib";
+import { RabbitMqConfig } from "./rabbitmq.config";
 
 export class QueueManager {
   private readonly connections: Map<
@@ -6,26 +7,53 @@ export class QueueManager {
     { model: ChannelModel; channel: Channel }
   > = new Map();
   private readonly reconnecting: Set<string> = new Set();
-  private readonly reconnectDelay: number;
-  constructor(
-    private readonly url: string,
-    private readonly options?: Options.Connect,
-    reconnectDelayMs: number = 30000
-  ) {
-    if (!url) throw new Error("RabbitMQ URL is required.");
-    this.reconnectDelay = reconnectDelayMs;
+  private readonly config: Required<RabbitMqConfig>;
+  constructor(config: RabbitMqConfig) {
+    if (!config.url) throw new Error("RabbitMQ URL is required.");
+    
+    // Set default configuration
+    this.config = {
+      url: config.url,
+      options: config.options || {},
+      connectionTimeout: config.connectionTimeout || 10000,
+      maxRetries: config.maxRetries || 5,
+      retryDelay: config.retryDelay || 30000,
+      heartbeat: config.heartbeat || 30,
+      tls: config.tls || { enabled: false },
+      authentication: config.authentication || {}
+    };
+    
     this.setupGracefulShutdown();
   }
 
   private async createConnection(
     queueName: string
   ): Promise<{ model: ChannelModel; channel: Channel }> {
-    const model = await amqplib.connect(this.url, {
-      heartbeat: this.options?.heartbeat ?? 30,
-      protocol: this.options?.protocol ?? "amqps",
-      port: this.options?.port ?? 5671,
-      ...this.options,
-    });
+    // Build connection options from config
+    let connectOptions: any = {
+      heartbeat: this.config.heartbeat,
+      ...this.config.options,
+    };
+
+    // Add authentication if provided
+    if (this.config.authentication.username && this.config.authentication.password) {
+      connectOptions.username = this.config.authentication.username;
+      connectOptions.password = this.config.authentication.password;
+    }
+
+    // Add TLS configuration if enabled
+    if (this.config.tls.enabled) {
+      connectOptions.tls = {
+        cert: this.config.tls.certPath ? require('fs').readFileSync(this.config.tls.certPath) : undefined,
+        key: this.config.tls.keyPath ? require('fs').readFileSync(this.config.tls.keyPath) : undefined,
+        ca: this.config.tls.caPath ? require('fs').readFileSync(this.config.tls.caPath) : undefined,
+        passphrase: this.config.tls.passphrase,
+        rejectUnauthorized: false, // You may want to make this configurable
+        ...connectOptions.tls
+      };
+    }
+
+    const model = await amqplib.connect(this.config.url, connectOptions);
 
     const connection = model.connection;
     const channel = await model.createChannel();
@@ -38,7 +66,7 @@ export class QueueManager {
       this.handleReconnect(queueName);
     });
 
-    connection.on("error", (err) => {
+    connection.on("error", (err: Error) => {
       console.error(`❌ Connection error on queue: ${queueName}`, err);
     });
 
@@ -48,31 +76,44 @@ export class QueueManager {
       this.handleReconnect(queueName);
     });
 
-    channel.on("error", (err) => {
+    channel.on("error", (err: Error) => {
       console.warn(`⚠️ Channel error for queue: ${queueName}`, err);
     });
 
     return { model, channel };
   }
 
+  private connectionAttempts = new Map<string, number>();
+
   private handleReconnect(queueName: string): void {
     if (this.reconnecting.has(queueName)) return;
+
+    const attempts = (this.connectionAttempts.get(queueName) || 0) + 1;
+    this.connectionAttempts.set(queueName, attempts);
+
+    if (attempts > this.config.maxRetries) {
+      console.error(`❌ Maximum retry attempts (${this.config.maxRetries}) exceeded for queue: ${queueName}`);
+      this.connectionAttempts.delete(queueName);
+      return;
+    }
 
     this.reconnecting.add(queueName);
     this.connections.delete(queueName);
 
+    console.log(`🔄 Attempt ${attempts}/${this.config.maxRetries} - Reconnecting to queue: ${queueName}...`);
+
     setTimeout(async () => {
       try {
-        console.log(`🔄 Reconnecting to queue: ${queueName}...`);
         const { model, channel } = await this.createConnection(queueName);
         this.connections.set(queueName, { model, channel });
+        this.connectionAttempts.delete(queueName); // Reset attempts on success
         console.log(`✅ Reconnected to queue: ${queueName}`);
       } catch (err) {
         console.error(`❌ Failed to reconnect to queue: ${queueName}`, err);
       } finally {
         this.reconnecting.delete(queueName);
       }
-    }, this.reconnectDelay);
+    }, this.config.retryDelay);
   }
 
   async getOrCreateQueue(queueName: string): Promise<Channel> {
@@ -85,7 +126,7 @@ export class QueueManager {
       } catch (err) {
         console.warn(`⚠️ Channel stale for ${queueName}, reconnecting...`, err);
         this.handleReconnect(queueName);
-        await this.delay(this.reconnectDelay);
+        await this.delay(this.config.retryDelay);
         throw err;
       }
     }
@@ -135,5 +176,27 @@ export class QueueManager {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Get connection status and resource usage
+   */
+  getConnectionStatus(): { 
+    totalConnections: number; 
+    activeQueues: string[]; 
+    connectionAttempts: Map<string, number> 
+  } {
+    return {
+      totalConnections: this.connections.size,
+      activeQueues: Array.from(this.connections.keys()),
+      connectionAttempts: new Map(this.connectionAttempts)
+    };
+  }
+
+  /**
+   * Get the number of active connections
+   */
+  getActiveConnectionCount(): number {
+    return this.connections.size;
   }
 }

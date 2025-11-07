@@ -1,14 +1,20 @@
 # **RabbitMQ Connect Helper**
-A lightweight TypeScript library for managing RabbitMQ connections, queues, producers, and consumers. This package simplifies RabbitMQ integration in your Node.js applications by providing reusable helpers.
+A lightweight TypeScript library for managing RabbitMQ connections, queues, producers, and consumers. This package simplifies RabbitMQ integration in your Node.js applications by providing reusable helpers with comprehensive error handling, retry mechanisms, and advanced features.
 
 ---
 
 ## **Features**
 
-- Manage RabbitMQ connections and channels seamlessly.
-- Support for multiple queues with dynamic queue creation.
-- Easy-to-use producers and consumers for publishing and receiving messages.
-- Built with TypeScript for type safety and better developer experience.
+- **Easy Setup**: Simple initialization with comprehensive configuration options
+- **Reliable Connections**: Automatic reconnection with configurable retry attempts and delays
+- **Robust Error Handling**: Built-in retry mechanisms with dead letter queue support
+- **Message Processing**: Timeout handling and message acknowledgment
+- **Multiple Exchange Types**: Support for direct, topic, fanout, and headers exchanges
+- **Queue Management**: Declare, bind, delete, and purge queues and exchanges
+- **RPC Support**: Request-response pattern implementation
+- **Type Safety**: Full TypeScript support with comprehensive type definitions
+- **Advanced Options**: TLS/SSL, authentication, and connection management
+- **Graceful Shutdown**: Automatic cleanup of connections on process termination
 
 ---
 
@@ -20,119 +26,357 @@ Install the package via NPM:
 npm install rabbitmq-connect-helper
 ```
 
-## **Usage**
+## **Getting Started**
 
-### Setup
+### Basic Setup
 
-Import the classes in your application:
+First, install the package:
 
-```typescript
-import { QueueManager, RabbitMQProducer, RabbitMQConsumer } from "rabbitmq-connect-helper";
+```bash
+npm install rabbitmq-connect-helper
 ```
 
+Then import and use in your application:
 
-### 🧩 Getting Started
+```typescript
+import { QueueManager, RabbitMQProducer, RabbitMQConsumer, RabbitMqConfig } from "rabbitmq-connect-helper";
+```
+
 ### 🔌 Initialize QueueManager
+
 ```typescript
- import { QueueManager } from 'rabbitmq-connect-helper'; const queueManager = new QueueManager({
-     connectionUrl: 'amqp:/user:password@localhost:5672', reconnectDelayMs: 5000, // Optional: Reconnect delay on failure 
- });
+import { QueueManager, RabbitMqConfig } from 'rabbitmq-connect-helper';
+
+// Basic configuration
+const config: RabbitMqConfig = {
+  url: 'amqp://localhost',  // Replace with your RabbitMQ server URL
+  maxRetries: 3,            // Retry connection 3 times before giving up
+  retryDelay: 5000,         // Wait 5 seconds between reconnection attempts
+  heartbeat: 30             // Heartbeat interval in seconds
+};
+
+const queueManager = new QueueManager(config);
 ```
 
-
-### ✅ Consumer Example
-    Consume messages from a queue with built-in support for:
-
-✅ Automatic message acknowledgment
-
-🔁 Retry mechanism with delay
-
-☠️ Dead Letter Queue (DLQ) support
-
-⚙️ Custom prefetch count for performance tuning
+### 📤 Basic Producer Usage
 
 ```typescript
-import { RabbitMQConsumer } from 'rabbitmq-connect-helper';
+import { QueueManager, RabbitMQProducer, RabbitMqConfig } from 'rabbitmq-connect-helper';
+
+const config: RabbitMqConfig = { url: 'amqp://localhost' };
+const queueManager = new QueueManager(config);
+const producer = new RabbitMQProducer(queueManager);
+
+// Send a simple message
+const success = await producer.send('my-queue', { message: 'Hello World!' });
+
+if (success) {
+  console.log('✅ Message sent successfully!');
+} else {
+  console.log('❌ Message was dropped');
+}
+```
+
+### ✅ Basic Consumer Usage
+
+```typescript
+import { QueueManager, RabbitMQConsumer, RabbitMqConfig } from 'rabbitmq-connect-helper';
 import { ConsumeMessage } from 'amqplib';
 
-// Initialize RabbitMQConsumer with QueueManager
+const config: RabbitMqConfig = { url: 'amqp://localhost' };
+const queueManager = new QueueManager(config);
 const consumer = new RabbitMQConsumer(queueManager);
 
-const queueName = 'exampleQueue';
+// Set up consumer
+await consumer.consume(
+  'my-queue',
+  async (msg: ConsumeMessage, ack: () => void) => {
+    console.log('Received:', msg.content.toString());
+    ack(); // Acknowledge message processing
+  }
+);
+
+console.log('Consumer is listening...');
+```
+
+## **Advanced Usage**
+
+### Enhanced Configuration with All Options
+
+```typescript
+import { QueueManager, RabbitMqConfig } from 'rabbitmq-connect-helper';
+
+const config: RabbitMqConfig = {
+  url: 'amqp://user:password@localhost:5672',
+  options: {
+    // Additional amqplib options
+  },
+  connectionTimeout: 10000,      // Connection timeout in ms
+  maxRetries: 5,                 // Maximum reconnection attempts
+  retryDelay: 30000,             // Delay between reconnection attempts (ms)
+  heartbeat: 30,                 // Heartbeat interval (seconds)
+  tls: {
+    enabled: false,              // Enable TLS/SSL
+    certPath: '/path/to/cert',   // Path to certificate file
+    keyPath: '/path/to/key',     // Path to key file
+    caPath: '/path/to/ca',       // Path to CA certificate
+    passphrase: 'passphrase'     // Passphrase if required
+  },
+  authentication: {
+    username: 'username',        // Username for authentication
+    password: 'password'         // Password for authentication
+  }
+};
+
+const queueManager = new QueueManager(config);
+```
+
+### Consumer with Error Handling and Retries
+
+```typescript
+import { RabbitMQConsumer, ConsumerOptions } from 'rabbitmq-connect-helper';
+import { ConsumeMessage } from 'amqplib';
+
+const consumer = new RabbitMQConsumer(queueManager);
+
+const consumerOptions: ConsumerOptions = {
+  prefetch: 5,                    // Process up to 5 messages concurrently
+  retryAttempts: 3,               // Retry failed messages up to 3 times
+  retryDelayMs: 5000,             // Wait 5 seconds between retries
+  deadLetterQueueSuffix: '.DLQ',  // Send to DLQ after retries exhausted
+  processingTimeout: 30000,       // Timeout message processing after 30s
+  errorHandler: (error, queueName, msg) => {
+    console.error(`Error in ${queueName}:`, error.message);
+    // Custom error handling logic
+  }
+};
 
 await consumer.consume(
-  queueName,
+  'exampleQueue',
   async (msg: ConsumeMessage, ack: () => void, retry: () => void) => {
     try {
-      const payload = msg.content.toString();
-      const data = JSON.parse(payload);
-
-      console.log(`✅ Received message:`, data);
-
-      // Your business logic goes here
-      ack(); // Confirm successful processing
+      const payload = JSON.parse(msg.content.toString());
+      console.log('Received message:', payload);
+      
+      // Your business logic here
+      await processBusinessLogic(payload);
+      
+      ack(); // Acknowledge successful processing
     } catch (error) {
-      console.error(`❌ Error processing message from ${queueName}:`, error);
-      await retry(); // Retry message with backoff, eventually to DLQ
+      console.error('Error processing message:', error);
+      await retry(); // Retry the message
     }
   },
-  {
-    prefetch: 10,                 // Optional: Controls concurrency
-    retryAttempts: 3,             // Optional: Max retries before DLQ
-    retryDelayMs: 5000,           // Optional: Wait time before retrying
-    deadLetterQueueSuffix: '.DLQ' // Optional: DLQ naming pattern
-  }
+  consumerOptions
 );
 ```
 
-### 📤 Producer Example
-
-Publish messages to a queue using the built-in RabbitMQProducer:
+### Producer with Advanced Options
 
 ```typescript
-import { QueueManager, RabbitMQProducer } from 'rabbitmq-connect-helper';
+import { RabbitMQProducer, ProducerOptions } from 'rabbitmq-connect-helper';
 
-// Step 1: Initialize QueueManager
-const queueManager = new QueueManager({
-  connectionUrl: 'amqp://user:password@localhost:5672',
-});
-
-// Step 2: Create RabbitMQProducer instance
 const producer = new RabbitMQProducer(queueManager);
 
-// Step 3: Publish a message
-const queueName = 'exampleQueue';
-const payload = {
+const producerOptions: ProducerOptions = {
+  persistent: true,                         // Make message persistent
+  contentType: 'application/json',          // Content type of the message
+  correlationId: 'unique-request-id',       // Correlation ID for RPC
+  replyTo: 'reply-queue-name',              // Reply-to queue name
+  expiration: 60000,                        // Message expires after 1 minute
+  headers: { 
+    custom: 'value',
+    timestamp: new Date().toISOString()
+  }                                         // Additional headers
+};
+
+const message = {
   id: '12345',
   action: 'create',
   data: {
-    name: 'Test',
+    name: 'Test Item',
     value: 42
   }
 };
 
-await producer.publish(queueName, payload);
-
-console.log(`✅ Message published to ${queueName}`);
-
+const success = await producer.send('my-queue', message, producerOptions);
 ```
 
-✨ Features
-JSON serialization built-in
+### Publishing to Exchanges
 
-Queue auto-declared (if not already present)
+```typescript
+// Publish to a topic exchange
+await producer.sendToExchange(
+  'my-topic-exchange',
+  'user.signup',
+  { userId: 123, timestamp: new Date().toISOString() },
+  producerOptions
+);
 
-Retry logic (if supported by your queue manager configuration)
+console.log('Message published to exchange');
+```
+
+## **Queue Management**
+
+The library provides additional tools for managing queues and exchanges:
+
+```typescript
+import { RabbitMQManager } from 'rabbitmq-connect-helper';
+
+const manager = new RabbitMQManager(queueManager);
+
+// Declare a queue
+await manager.declareQueue('my-queue', {
+  durable: true,
+  autoDelete: false
+});
+
+// Declare an exchange
+await manager.declareExchange('my-exchange', {
+  type: 'topic',
+  durable: true
+});
+
+// Bind queue to exchange
+await manager.bindQueue('my-queue', 'my-exchange', 'user.*');
+
+// Get queue information
+const info = await manager.getQueueInfo('my-queue');
+console.log('Queue info:', info);
+
+// Purge all messages from queue
+const purgeResult = await manager.purgeQueue('my-queue');
+console.log('Purged messages:', purgeResult.messageCount);
+```
+
+## **RPC (Request-Response) Pattern**
+
+Implement request-response communication between services:
+
+```typescript
+import { RabbitMQRPCServer, RabbitMQRPCClient } from 'rabbitmq-connect-helper';
+
+// Server setup
+const rpcServer = new RabbitMQRPCServer(queueManager);
+await rpcServer.listen('rpc-queue', async (request, reply) => {
+  // Process the request
+  const result = await processRequest(request);
+  
+  // Send response
+  await reply(result);
+});
+
+// Client setup
+const rpcClient = new RabbitMQRPCClient(queueManager, producer);
+await rpcClient.init();
+
+// Make an RPC call
+const response = await rpcClient.send('rpc-queue', { 
+  operation: 'add', 
+  a: 5, 
+  b: 3 
+});
+
+console.log('RPC Response:', response.body);
+```
+
+## **Complete Working Example**
+
+Here's a complete example that demonstrates all the main features:
+
+```typescript
+import { 
+  QueueManager, 
+  RabbitMQConsumer, 
+  RabbitMQProducer, 
+  RabbitMqConfig,
+  ConsumerOptions 
+} from 'rabbitmq-connect-helper';
+
+// 1. Configuration
+const config: RabbitMqConfig = {
+  url: 'amqp://localhost',
+  maxRetries: 3,
+  retryDelay: 5000,
+  heartbeat: 30
+};
+
+async function runExample() {
+  // 2. Initialize components
+  const queueManager = new QueueManager(config);
+  const consumer = new RabbitMQConsumer(queueManager);
+  const producer = new RabbitMQProducer(queueManager);
+
+  // 3. Define queue name
+  const queueName = 'example-queue';
+
+  // 4. Setup consumer with error handling
+  const consumerOptions: ConsumerOptions = {
+    prefetch: 2,
+    retryAttempts: 3,
+    retryDelayMs: 2000,
+    deadLetterQueueSuffix: '.DLQ',
+    processingTimeout: 10000,
+    errorHandler: (error, queueName, msg) => {
+      console.error(`Error in ${queueName}:`, error.message);
+    }
+  };
+
+  await consumer.consume(
+    queueName,
+    async (msg, ack, retry) => {
+      try {
+        const content = JSON.parse(msg.content.toString());
+        console.log('Processing:', content);
+        
+        // Simulate processing
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        console.log('✅ Message processed successfully');
+        ack();
+      } catch (error) {
+        console.error('❌ Error processing message:', error);
+        await retry();
+      }
+    },
+    consumerOptions
+  );
+
+  // 5. Send messages
+  for (let i = 1; i <= 3; i++) {
+    const success = await producer.send(queueName, {
+      id: i,
+      message: `Hello World ${i}`,
+      timestamp: new Date().toISOString()
+    });
+
+    if (success) {
+      console.log(`✅ Message ${i} sent`);
+    }
+  }
+
+  // 6. Wait for processing and cleanup
+  await new Promise(resolve => setTimeout(resolve, 5000));
+  await queueManager.closeAll();
+}
+
+// Run the example
+runExample().catch(console.error);
+```
 
 ## **API Reference**
 
 ### QueueManager
 
-**Constructor:** `new QueueManager(url: string)`  
-Initializes a connection manager for RabbitMQ.
+**Constructor:** `new QueueManager(config: RabbitMqConfig)`  
+Initializes a connection manager for RabbitMQ with the specified configuration.
 
 **Methods:**
-- `closeAll()`: Closes all connections and channels.
+- `getOrCreateQueue(queueName: string): Promise<Channel>` - Creates or retrieves a queue channel
+- `closeQueue(queueName: string): Promise<void>` - Closes a specific queue connection
+- `closeAll(): Promise<void>` - Closes all connections and channels
+- `getConnectionStatus(): { totalConnections: number, activeQueues: string[], connectionAttempts: Map<string, number> }` - Gets connection status and resource usage
+- `getActiveConnectionCount(): number` - Gets the number of active connections
 
 ### RabbitMQProducer
 
@@ -140,7 +384,8 @@ Initializes a connection manager for RabbitMQ.
 Creates a producer instance.
 
 **Methods:**
-- `send(queueName: string, message: any)`: Publishes a message to the specified queue.
+- `send(queueName: string, message: string | object | Buffer, options?: ProducerOptions): Promise<boolean>` - Publishes a message to the specified queue
+- `sendToExchange(exchangeName: string, routingKey: string, message: string | object | Buffer, options?: ProducerOptions): Promise<void>` - Publishes a message to an exchange
 
 ### RabbitMQConsumer
 
@@ -148,21 +393,46 @@ Creates a producer instance.
 Creates a consumer instance.
 
 **Methods:**
-- `consume(queueName: string, callback: (message: string) => void)`: Listens for messages from the specified queue and processes them using the provided callback.
+- `consume(queueName: string, callback: (message: ConsumeMessage, ack: () => void, retry: () => void) => Promise<void>, options?: ConsumerOptions): Promise<void>` - Listens for messages from the specified queue
+- `pause(queueName: string): void` - Pauses consuming from a queue
+- `resume(queueName: string): void` - Resumes consuming from a queue
+- `stop(queueName: string): Promise<void>` - Stops consuming from a queue
+- `getMetrics(): Record<string, { ack: number, nack: number, errors: number }>` - Gets consumer metrics
 
-## **Configuration**
+### RabbitMQManager
 
-The library uses the RabbitMQ URL for connecting to the server. The URL format is:
+**Constructor:** `new RabbitMQManager(queueManager: QueueManager)`  
+Creates a queue and exchange management instance.
 
-```
-amqp://<username>:<password>@<host>
-```
+**Methods:**
+- `declareQueue(queueName: string, options?: QueueDeclarationOptions): Promise<any>` - Declares a queue
+- `deleteQueue(queueName: string): Promise<any>` - Deletes a queue
+- `purgeQueue(queueName: string): Promise<any>` - Purges all messages from a queue
+- `declareExchange(exchangeName: string, options?: ExchangeDeclarationOptions): Promise<any>` - Declares an exchange
+- `deleteExchange(exchangeName: string): Promise<any>` - Deletes an exchange
+- `bindQueue(queueName: string, exchangeName: string, routingKey?: string): Promise<void>` - Binds a queue to an exchange
+- `unbindQueue(queueName: string, exchangeName: string, routingKey?: string): Promise<void>` - Unbinds a queue from an exchange
+- `getQueueInfo(queueName: string): Promise<QueueInfo>` - Gets information about a queue
+- `getMessage(queueName: string): Promise<any>` - Gets a single message from a queue (basic.get)
+- `closeAll(): Promise<void>` - Closes all managed connections
 
-Example:
+### RabbitMQRPCClient
 
-```
-amqp://admin:StrongPassword123@localhost
-```
+**Constructor:** `new RabbitMQRPCClient(queueManager: QueueManager, producer: RabbitMQProducer, options?: RPCOptions)`  
+Creates an RPC client instance.
+
+**Methods:**
+- `init(): Promise<void>` - Initializes the RPC client
+- `send(queueName: string, body: any, options?: ProducerOptions): Promise<RPCResponse>` - Sends an RPC request and waits for response
+- `close(): Promise<void>` - Closes the RPC client
+
+### RabbitMQRPCServer
+
+**Constructor:** `new RabbitMQRPCServer(queueManager: QueueManager, options?: RPCServerOptions)`  
+Creates an RPC server instance.
+
+**Methods:**
+- `listen(queueName: string, handler: RPCRequestHandler): Promise<void>` - Starts listening for RPC requests on the specified queue
 
 ## **Testing**
 
@@ -170,6 +440,30 @@ Run unit tests using Jest:
 
 ```bash
 npm run test
+```
+
+## **Examples**
+
+Check out the [examples directory](./examples/) for comprehensive usage examples:
+
+- [Basic usage](./examples/basic-usage.ts) - Simple producer/consumer example
+- [Advanced usage](./examples/advanced-usage.ts) - Configuration with TLS, authentication, and advanced options  
+- [Error handling](./examples/error-handling.ts) - Retry mechanisms and Dead Letter Queue usage
+- [Exchange usage](./examples/exchange-usage.ts) - Sending messages to different exchange types
+- [Comprehensive example](./examples/comprehensive.ts) - All features demonstrated in one example
+- [Queue management](./examples/queue-management.ts) - Queue and exchange declaration, binding, and management
+- [RPC usage](./examples/rpc-usage.ts) - Request-response communication between services
+
+To run the examples:
+```bash
+# Install dependencies
+npm install
+
+# Build the project
+npm run build
+
+# Run a specific example
+npx ts-node examples/basic-usage.ts
 ```
 
 ## **Contributing**

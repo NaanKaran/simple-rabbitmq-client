@@ -1,0 +1,21 @@
+{
+  "name": "rabbitmq-connect-helper-examples",
+  "version": "1.0.0",
+  "description": "Examples for rabbitmq-connect-helper",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "github.com/naankaran/rabbitmq-connect-helper"
+  },
+  "homepage": "github.com/naankaran/rabbitmq-connect-helper#readme",
+  "scripts": {
+    "basic": "ts-node examples/basic-usage.ts",
+    "advanced": "ts-node examples/advanced-usage.ts",
+    "error": "ts-node examples/error-handling.ts",
+    "exchange": "ts-node examples/exchange-usage.ts"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  }
+}
