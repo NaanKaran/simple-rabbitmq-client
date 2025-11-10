@@ -99,6 +99,39 @@ process.on('SIGINT', onShutdown)
 process.on('SIGTERM', onShutdown)
 ```
 
+## **Basic Producer API**
+
+For simpler use cases, you can use the direct producer API:
+
+```typescript
+import { Connection } from 'rabbitmq-connect-helper';
+
+// Initialize:
+const rabbit = new Connection('amqp://guest:guest@localhost:5672')
+rabbit.on('error', (err) => {
+  console.log('RabbitMQ connection error', err)
+})
+rabbit.on('connection', () => {
+  console.log('Connection successfully (re)established')
+})
+
+// Send a message:
+const send = await rabbit.createProducer({ queue: 'my-queue' })
+const success = await send({ hello: 'world' })
+console.log('Message sent:', success)
+
+// Publish to exchange:
+await rabbit.sendToExchange('my-exchange', 'routing.key', { hello: 'world' })
+
+// Queue and exchange declarations:
+await rabbit.queueDeclare('my-queue', { durable: true })
+await rabbit.exchangeDeclare('my-exchange', 'topic', { durable: true })
+await rabbit.queueBind('my-queue', 'my-exchange', 'routing.key')
+
+// Close connection when done:
+await rabbit.close()
+```
+
 ## **Getting Started**
 
 ### Install the package:
@@ -125,20 +158,23 @@ rabbit.on('connection', () => {
 
 // Consume messages from a queue:
 // See API docs for all options
-const stop = await rabbit.createConsumer({
+const sub = await rabbit.createConsumer({
   queue: 'my-queue',
-  handler: async (msg, ack, retry) => {
-    console.log('Received:', msg.content.toString())
-    ack() // acknowledge the message
-  },
-  prefetch: 1,
-  retryAttempts: 3,
-  retryDelayMs: 5000
+  queueOptions: {durable: true},
+  // Optionally handle messages with advanced options
+}, async (msg) => {
+  console.log('Received:', msg)
+  // The message is automatically acknowledged when this function ends
+})
+
+sub.on('error', (err) => {
+  console.log('consumer error', err)
 })
 
 // Send a message:
 const send = await rabbit.createProducer({ queue: 'my-queue' })
 const success = await send({ hello: 'world' })
+console.log('Message sent:', success)
 
 // Publish to exchange:
 await rabbit.sendToExchange('my-exchange', 'routing.key', { hello: 'world' })
@@ -551,6 +587,21 @@ Creates an RPC server instance.
 
 **Methods:**
 - `listen(queueName: string, handler: RPCRequestHandler): Promise<void>` - Starts listening for RPC requests on the specified queue
+
+### Connection
+
+**Constructor:** `new Connection(connectionString: string, options?: Partial<RabbitMqConfig>)`
+Creates a connection instance with automatic reconnection features.
+
+**Methods:**
+- `createConsumer(config: EnhancedConsumerOptionsBase, handler: (msg: any) => Promise<void | number>): Promise<Consumer>` - Creates a consumer instance with advanced options
+- `createPublisher(options: EnhancedPublisherOptions): Promise<Publisher>` - Creates a publisher instance with advanced options
+- `createProducer(options: EnhancedProducerOptions): Promise<(message: any) => Promise<boolean>>` - Creates a simple producer function that can send messages to a queue
+- `sendToExchange(exchangeName: string, routingKey: string, message: any): Promise<void>` - Sends a message directly to an exchange
+- `queueDeclare(queueName: string, options?: QueueOptions): Promise<void>` - Declares a queue with the specified options
+- `exchangeDeclare(exchangeName: string, type: string, options?: Omit<ExchangeOptions, 'exchange' | 'type'>): Promise<void>` - Declares an exchange with the specified type and options
+- `queueBind(queueName: string, exchangeName: string, routingKey: string): Promise<void>` - Binds a queue to an exchange with the specified routing key
+- `close(): Promise<void>` - Closes all connections and channels
 
 ## **Testing**
 

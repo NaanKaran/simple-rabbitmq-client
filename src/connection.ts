@@ -53,6 +53,11 @@ export interface EnhancedConsumerOptions extends EnhancedConsumerOptionsBase {
   handler: (msg: any) => Promise<void | number>;
 }
 
+export interface EnhancedProducerOptions {
+  queue: string;
+  queueOptions?: QueueOptions;
+}
+
 export interface EnhancedPublisherOptions {
   confirm?: boolean;
   maxAttempts?: number;
@@ -255,10 +260,61 @@ export class Connection extends EventEmitter {
     return consumer;
   }
 
+  async createProducer(options: EnhancedProducerOptions): Promise<(message: any) => Promise<boolean>>;
+  async createProducer(queueName: string, options?: EnhancedProducerOptions): Promise<(message: any) => Promise<boolean>>;
+
+  async createProducer(arg1: string | EnhancedProducerOptions, arg2?: EnhancedProducerOptions): Promise<(message: any) => Promise<boolean>> {
+    const producer = new RabbitMQProducer(this.queueManager);
+    let queueName: string;
+    let queueOptions: QueueOptions | undefined;
+
+    if (typeof arg1 === 'string') {
+      // Called as createProducer(queueName, options?)
+      queueName = arg1;
+      queueOptions = arg2?.queueOptions;
+    } else {
+      // Called as createProducer(options)
+      const options = arg1 as EnhancedProducerOptions;
+      queueName = options.queue;
+      queueOptions = options.queueOptions;
+    }
+
+    // Declare queue if not exists (with the options provided)
+    if (queueOptions) {
+      const manager = new RabbitMQManager(this.queueManager);
+      await manager.declareQueue(queueName, queueOptions);
+    }
+
+    // Return a function that can be called with the message
+    return async (message: any): Promise<boolean> => {
+      return await producer.send(queueName, message);
+    };
+  }
+
   async createPublisher(options: EnhancedPublisherOptions = {}): Promise<Publisher> {
     const publisher = new Publisher(this.queueManager, options);
     await publisher.init();
     return publisher;
+  }
+
+  async sendToExchange(exchangeName: string, routingKey: string, message: any): Promise<void> {
+    const producer = new RabbitMQProducer(this.queueManager);
+    await producer.sendToExchange(exchangeName, routingKey, message);
+  }
+
+  async queueDeclare(queueName: string, options: QueueOptions = {}): Promise<void> {
+    const manager = new RabbitMQManager(this.queueManager);
+    await manager.declareQueue(queueName, options);
+  }
+
+  async exchangeDeclare(exchangeName: string, type: string, options: Omit<ExchangeOptions, 'exchange' | 'type'> = {}): Promise<void> {
+    const manager = new RabbitMQManager(this.queueManager);
+    await manager.declareExchange(exchangeName, { type, ...options });
+  }
+
+  async queueBind(queueName: string, exchangeName: string, routingKey: string): Promise<void> {
+    const manager = new RabbitMQManager(this.queueManager);
+    await manager.bindQueue(queueName, exchangeName, routingKey);
   }
 
   async close(): Promise<void> {

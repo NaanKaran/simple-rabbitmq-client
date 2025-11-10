@@ -81,16 +81,38 @@ export class RabbitMQConsumer {
           console.log(`Stopped consumer for: ${queueName}`);
         });
 
-        // Reconnect logic
+        // Reconnect logic - when channel closes, try to restart after delay
         channel.on("close", async () => {
           console.warn(
             `Channel closed for ${queueName}. Retrying in ${retryDelayMs}ms...`
           );
           this.activeConsumers.delete(queueName);
-          setTimeout(
-            () => this.consume(queueName, onMessage, options),
-            retryDelayMs
-          );
+          
+          // Cancel any pending consumers before reconnection
+          if (this.activeConsumers.has(queueName)) {
+            try {
+              const stop = this.activeConsumers.get(queueName);
+              if (stop) await stop();
+              this.activeConsumers.delete(queueName);
+            } catch (e) {
+              console.warn(`Error stopping consumer during close event:`, e);
+            }
+          }
+
+          setTimeout(async () => {
+            try {
+              await this.consume(queueName, onMessage, options);
+            } catch (e) {
+              console.error(`Error restarting consumer for ${queueName}:`, e);
+              if (errorHandler) {
+                errorHandler(
+                  e instanceof Error ? e : new Error(String(e)),
+                  queueName,
+                  null
+                );
+              }
+            }
+          }, retryDelayMs);
         });
 
         channel.on("error", (err: Error) => {
@@ -138,17 +160,28 @@ export class RabbitMQConsumer {
     return (msg: ConsumeMessage | null) => {
       if (!msg || this.pausedQueues.has(queueName)) return;
 
+      // Safe acknowledgment function that checks channel state
       const ack = () => {
-        try {
-          channel.ack(msg);
-          this.metrics[queueName].ack++;
-          this.messageAttempts.delete(msg);
-        } catch (err) {
-          const error = err instanceof Error ? err : new Error(String(err));
-          console.warn(`Ack failed for ${queueName}:`, error);
-          if (errorHandler) {
-            errorHandler(error, queueName, msg);
+        // Check if channel is still open before attempting to acknowledge
+        if (channel && (channel as any).connection && !(channel as any).connection._disposed) {
+          try {
+            channel.ack(msg);
+            this.metrics[queueName].ack++;
+            this.messageAttempts.delete(msg);
+          } catch (err) {
+            const error = err instanceof Error ? err : new Error(String(err));
+            // If channel is closed, don't attempt to handle error here
+            if (error.message.includes("Channel closed") || error.message.includes("unknown delivery tag")) {
+              console.warn(`Could not ack message on closed channel for ${queueName}`);
+            } else {
+              console.warn(`Ack failed for ${queueName}:`, error);
+              if (errorHandler) {
+                errorHandler(error, queueName, msg);
+              }
+            }
           }
+        } else {
+          console.warn(`Channel closed for ${queueName}, cannot acknowledge message`);
         }
       };
 
@@ -189,8 +222,14 @@ export class RabbitMQConsumer {
                 msg
               );
             }
-            // Still ack the message to prevent it from being retried indefinitely
-            ack();
+            // Still try to ack the message if the channel is still open
+            if (channel && (channel as any).connection && !(channel as any).connection._disposed) {
+              try {
+                channel.ack(msg);
+              } catch (ackErr) {
+                console.warn(`Could not ack message in DLQ handler:`, ackErr);
+              }
+            }
           });
         }
       };
@@ -241,6 +280,14 @@ export class RabbitMQConsumer {
                     msg
                   );
                 }
+                // Try to ack if channel is still valid
+                if (channel && (channel as any).connection && !(channel as any).connection._disposed) {
+                  try {
+                    channel.ack(msg);
+                  } catch (ackErr) {
+                    console.warn(`Could not ack message after timeout:`, ackErr);
+                  }
+                }
               }
             );
           } else {
@@ -249,6 +296,7 @@ export class RabbitMQConsumer {
         }
       };
 
+      // Start processing the message
       processMessage().catch((err) => {
         console.error(
           `Unexpected error processing message in ${queueName}:`,
