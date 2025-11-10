@@ -116,8 +116,8 @@ rabbit.on('connection', () => {
 })
 
 // Send a message:
-const send = await rabbit.createProducer({ queue: 'my-queue' })
-const success = await send({ hello: 'world' })
+const publisher = await rabbit.createProducer({ queue: 'my-queue' })
+const success = await publisher.send({ hello: 'world' })
 console.log('Message sent:', success)
 
 // Publish to exchange:
@@ -172,8 +172,8 @@ sub.on('error', (err) => {
 })
 
 // Send a message:
-const send = await rabbit.createProducer({ queue: 'my-queue' })
-const success = await send({ hello: 'world' })
+const publisher = await rabbit.createProducer({ queue: 'my-queue' })
+const success = await publisher.send({ hello: 'world' })
 console.log('Message sent:', success)
 
 // Publish to exchange:
@@ -596,7 +596,8 @@ Creates a connection instance with automatic reconnection features.
 **Methods:**
 - `createConsumer(config: EnhancedConsumerOptionsBase, handler: (msg: any) => Promise<void | number>): Promise<Consumer>` - Creates a consumer instance with advanced options
 - `createPublisher(options: EnhancedPublisherOptions): Promise<Publisher>` - Creates a publisher instance with advanced options
-- `createProducer(options: EnhancedProducerOptions): Promise<(message: any) => Promise<boolean>>` - Creates a simple producer function that can send messages to a queue
+- `createProducer(options: EnhancedProducerOptions): Promise<EnhancedProducer>` - Creates an enhanced producer instance that can send messages to a queue with advanced options
+- `createProducer(queueName: string, options?: ProducerOptionsOnly): Promise<SimpleProducer>` - Creates a simple producer instance for the specified queue name with optional queue options
 - `sendToExchange(exchangeName: string, routingKey: string, message: any): Promise<void>` - Sends a message directly to an exchange
 - `queueDeclare(queueName: string, options?: QueueOptions): Promise<void>` - Declares a queue with the specified options
 - `exchangeDeclare(exchangeName: string, type: string, options?: Omit<ExchangeOptions, 'exchange' | 'type'>): Promise<void>` - Declares an exchange with the specified type and options

@@ -1,6 +1,6 @@
 {
   "name": "rabbitmq-connect-helper",
-  "version": "3.3.0",
+  "version": "3.5.0",
   "description": "A RabbitMQ client for managing producers, consumers, and queues.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
