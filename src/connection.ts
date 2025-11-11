@@ -595,15 +595,15 @@ export class Connection extends EventEmitter {
 
       const consumer = new RabbitMQConsumer(this.queueManager);
       return await consumer.consume(queueName, onMessage, options);
+    } else {
+      // Otherwise treat as enhanced consumer creation
+      const config = arg1 as EnhancedConsumerOptionsBase;
+      const handler = arg2 as (msg: any) => Promise<void | number>;
+      const fullConfig: EnhancedConsumerOptions = { ...config, handler };
+      const consumer = new Consumer(this.queueManager, fullConfig);
+      await consumer.init(fullConfig);
+      return consumer;
     }
-
-    // Otherwise treat as enhanced consumer creation
-    const config = arg1 as EnhancedConsumerOptionsBase;
-    const handler = arg2 as (msg: any) => Promise<void | number>;
-    const fullConfig: EnhancedConsumerOptions = { ...config, handler };
-    const consumer = new Consumer(this.queueManager, fullConfig);
-    await consumer.init(fullConfig);
-    return consumer;
   }
 
   /**
