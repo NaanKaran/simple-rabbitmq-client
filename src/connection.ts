@@ -18,9 +18,13 @@ import {
  * Options for declaring queues
  */
 export interface QueueOptions {
+  /** Durable queues survive server restarts */
   durable?: boolean;
+  /** Exclusive queues are deleted when the connection is closed */
   exclusive?: boolean;
+  /** Auto-delete queues when they have no consumers */
   autoDelete?: boolean;
+  /** Additional arguments for the queue */
   arguments?: any;
 }
 
@@ -28,8 +32,11 @@ export interface QueueOptions {
  * Quality of Service options for consumers
  */
 export interface QoSOptions {
+  /** Number of messages to prefetch */
   prefetchCount?: number;
+  /** Maximum size of messages to prefetch */
   prefetchSize?: number;
+  /** Apply QoS settings globally */
   global?: boolean;
 }
 
@@ -37,12 +44,19 @@ export interface QoSOptions {
  * Options for declaring exchanges
  */
 export interface ExchangeOptions {
+  /** Name of the exchange */
   exchange: string;
+  /** Type of the exchange (direct, topic, headers, fanout, match, etc.) */
   type: "direct" | "topic" | "headers" | "fanout" | "match" | string;
+  /** Durable exchanges survive server restarts */
   durable?: boolean;
+  /** Internal exchanges cannot be published to directly */
   internal?: boolean;
+  /** Auto-delete exchanges when they have no bindings */
   autoDelete?: boolean;
+  /** Alternate exchange for unroutable messages */
   alternateExchange?: string;
+  /** Additional arguments for the exchange */
   arguments?: any;
 }
 
@@ -50,8 +64,11 @@ export interface ExchangeOptions {
  * Queue binding configuration
  */
 export interface QueueBinding {
+  /** Name of the exchange to bind to */
   exchange: string;
+  /** Routing key for the binding */
   routingKey: string;
+  /** Additional arguments for the binding */
   arguments?: any;
 }
 
@@ -59,11 +76,17 @@ export interface QueueBinding {
  * Base options for consumer configuration
  */
 export interface EnhancedConsumerOptionsBase {
+  /** Name of the queue to consume from */
   queue: string;
+  /** Options for declaring the queue */
   queueOptions?: QueueOptions;
+  /** Quality of Service options for the consumer */
   qos?: QoSOptions;
+  /** Exchanges to declare before consuming */
   exchanges?: ExchangeOptions[];
+  /** Bindings between queues and exchanges */
   queueBindings?: QueueBinding[];
+  /** Consumer-specific options */
   consumerOptions?: Partial<ConsumerOptions>;
 }
 
@@ -71,6 +94,7 @@ export interface EnhancedConsumerOptionsBase {
  * Complete consumer options including handler
  */
 export interface EnhancedConsumerOptions extends EnhancedConsumerOptionsBase {
+  /** Message handler function */
   handler: (msg: any) => Promise<void | number>;
 }
 
@@ -78,7 +102,9 @@ export interface EnhancedConsumerOptions extends EnhancedConsumerOptionsBase {
  * Options for enhanced producer
  */
 export interface EnhancedProducerOptions {
+  /** Name of the queue to produce to */
   queue: string;
+  /** Options for declaring the queue */
   queueOptions?: QueueOptions;
 }
 
@@ -86,6 +112,7 @@ export interface EnhancedProducerOptions {
  * Options for simple producer only
  */
 export interface ProducerOptionsOnly {
+  /** Options for declaring the queue */
   queueOptions?: QueueOptions;
 }
 
@@ -93,9 +120,13 @@ export interface ProducerOptionsOnly {
  * Options for publisher
  */
 export interface EnhancedPublisherOptions {
+  /** Enable publish confirmations */
   confirm?: boolean;
+  /** Maximum number of retry attempts */
   maxAttempts?: number;
+  /** Exchanges to declare before publishing */
   exchanges?: ExchangeOptions[];
+  /** Producer-specific options */
   producerOptions?: Partial<ProducerOptions>;
 }
 
@@ -103,8 +134,11 @@ export interface EnhancedPublisherOptions {
  * Metadata for message routing
  */
 export interface MessageMetadata {
+  /** Name of the exchange to publish to */
   exchange?: string;
+  /** Routing key for the message */
   routingKey?: string;
+  /** Name of the queue to publish to */
   queue?: string;
 }
 
@@ -142,7 +176,8 @@ export class SimpleProducer extends EventEmitter {
     try {
       return await this.rabbitProducer.send(this.queueName, message);
     } catch (error) {
-      const typedError = error instanceof Error ? error : new Error(String(error));
+      const typedError =
+        error instanceof Error ? error : new Error(String(error));
       this.emit("error", typedError);
       throw typedError;
     }
@@ -203,7 +238,8 @@ export class EnhancedProducer extends EventEmitter {
       }
       return await this.rabbitProducer.send(this.queueName, message);
     } catch (error) {
-      const typedError = error instanceof Error ? error : new Error(String(error));
+      const typedError =
+        error instanceof Error ? error : new Error(String(error));
       this.emit("error", typedError);
       throw typedError;
     }
@@ -262,7 +298,8 @@ export class Publisher extends EventEmitter {
             arguments: exchange.arguments,
           });
         } catch (error) {
-          const typedError = error instanceof Error ? error : new Error(String(error));
+          const typedError =
+            error instanceof Error ? error : new Error(String(error));
           this.emit(
             "error",
             new Error(
@@ -331,7 +368,8 @@ export class Publisher extends EventEmitter {
 
         if (attempt === maxAttempts) {
           // Final attempt failed, emit error and re-throw
-          const typedError = error instanceof Error ? error : new Error(String(error));
+          const typedError =
+            error instanceof Error ? error : new Error(String(error));
           this.emit("error", typedError);
           throw typedError;
         }
@@ -512,16 +550,77 @@ export class Connection extends EventEmitter {
   }
 
   /**
-   * Create a consumer with enhanced options
+   * Create a consumer with enhanced options OR directly create a consumer that
+   * uses the lower-level consume signature (queueName, onMessage, options).
+   *
+   * Overloads:
+   * - createConsumer(queueName, onMessage, options?) -> Promise<void>
+   * - createConsumer(config, handler) -> Promise<Consumer>
    */
+  async createConsumer(
+    queueName: string,
+    onMessage: (
+      msg: ConsumeMessage,
+      ack: () => void,
+      retry: () => void
+    ) => Promise<void>,
+    options?: ConsumerOptions
+  ): Promise<void>;
+
   async createConsumer(
     config: EnhancedConsumerOptionsBase,
     handler: (msg: any) => Promise<void | number>
-  ): Promise<Consumer> {
+  ): Promise<Consumer>;
+
+  async createConsumer(
+    arg1: string | EnhancedConsumerOptionsBase,
+    arg2?:
+      | ((msg: any) => Promise<void | number>)
+      | ((
+          msg: ConsumeMessage,
+          ack: () => void,
+          retry: () => void
+        ) => Promise<void>),
+    arg3?: ConsumerOptions
+  ): Promise<Consumer | void> {
+    // If first arg is a string, route to the low-level consumer.consume
+    if (typeof arg1 === "string") {
+      const queueName = arg1;
+      const onMessage = arg2 as (
+        msg: ConsumeMessage,
+        ack: () => void,
+        retry: () => void
+      ) => Promise<void>;
+      const options = arg3 || {};
+
+      const consumer = new RabbitMQConsumer(this.queueManager);
+      return await consumer.consume(queueName, onMessage, options);
+    }
+
+    // Otherwise treat as enhanced consumer creation
+    const config = arg1 as EnhancedConsumerOptionsBase;
+    const handler = arg2 as (msg: any) => Promise<void | number>;
     const fullConfig: EnhancedConsumerOptions = { ...config, handler };
     const consumer = new Consumer(this.queueManager, fullConfig);
     await consumer.init(fullConfig);
     return consumer;
+  }
+
+  /**
+   * Direct consume method - exposes the RabbitMQConsumer's consume method directly
+   * This allows for more granular control over message consumption
+   */
+  async consume(
+    queueName: string,
+    onMessage: (
+      msg: ConsumeMessage,
+      ack: () => void,
+      retry: () => void
+    ) => Promise<void>,
+    options: ConsumerOptions = {}
+  ): Promise<void> {
+    const consumer = new RabbitMQConsumer(this.queueManager);
+    return await consumer.consume(queueName, onMessage, options);
   }
 
   /**

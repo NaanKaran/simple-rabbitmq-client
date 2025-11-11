@@ -27,6 +27,36 @@ Install the package via NPM:
 npm install rabbitmq-connect-helper
 ```
 
+## **Consumer**
+
+```typescript
+import { Connection } from "rabbitmq-connect-helper";
+
+// Initialize:
+const rabbit = new Connection(
+  "connecting_string_here"
+);
+
+// Consume messages from a queue:
+// See API docs for all options
+const sub = await rabbit.createConsumer(
+  {
+    queue: "my-queue",
+    queueOptions: { durable: true },
+    // Optionally handle messages with advanced options
+  },
+  async (msg) => {
+    console.log("Received:", msg);
+    // The message is automatically acknowledged when this function ends
+  }
+);
+
+sub.on("error", (err) => {
+  console.log("consumer error", err);
+});
+
+```
+
 ## **Simplified API**
 
 The library provides a simple Connection class with Consumer and Publisher instances for professional RabbitMQ usage:
