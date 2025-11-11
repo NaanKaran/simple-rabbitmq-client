@@ -57,6 +57,124 @@ sub.on("error", (err) => {
 
 ```
 
+### **Acknowledgment Modes & Reliability Options**
+
+The consumer supports different acknowledgment modes and reliability patterns:
+
+#### **Acknowledgment Mode Options:**
+
+| Mode | Who Acknowledges? | Reliability | Typical Use |
+|------|------------------|-------------|-------------|
+| Manual (default) | Consumer (you) | ✅ Reliable | Payments, APIs, jobs |
+| Auto | RabbitMQ | ❌ Unreliable | Logs, telemetry |
+
+```typescript
+// Manual acknowledgment (default) - Most reliable
+await rabbit.createConsumer({
+  queue: "critical-queue",
+  onMessage: async (msg, ack, retry) => {
+    // Process critical message...
+   ack(); // Manually acknowledge after successful processing
+  },
+}, {
+  ackMode: 'manual'  // Default behavior
+});
+
+// Auto acknowledgment - Higher performance but less reliable
+await rabbit.createConsumer({
+  queue: "log-queue",
+  onMessage: async (msg, ack, retry) => {
+    console.log("Log:", msg.content.toString());
+    // No need to manually ack - RabbitMQ auto-acks
+  },
+}, {
+  ackMode: 'auto'  // RabbitMQ auto-acks messages
+});
+```
+
+#### **Negative Acknowledgment (Nack) Behavior:**
+
+| Behavior | Result | Use Case |
+|----------|--------|----------|
+| Requeue | Message is requeued for retry | Temporary failures |
+| No Requeue (default) | Message sent to Dead Letter Queue (DLQ) | Permanent failures |
+
+```typescript
+// Nack with requeue - For temporary failures (default behavior)
+await rabbit.createConsumer({
+  queue: "temporary-failures-queue",
+  onMessage: async (msg, ack, retry) => {
+    try {
+      // Process message that might have temporary failure
+      await processMessage(msg);
+       ack();
+    } catch (error) {
+      // This will requeue the message due to nackBehavior: 'requeue'
+      await retry();
+    }
+  },
+}, {
+  nackBehavior: 'requeue',  // Default - requeue on failure
+  retryAttempts: 3,         // Retry up to 3 times before giving up
+  retryDelayMs: 5000        // Wait 5 seconds between retries
+});
+
+// Nack with no requeue - Send to Dead Letter Queue on failure
+await rabbit.createConsumer({
+  queue: "permanent-failures-queue",
+  onMessage: async (msg, ack, retry) => {
+    try {
+      // Process message that might have permanent failure
+      await processMessage(msg);
+       ack();
+    } catch (error) {
+      // This will send the message to DLQ due to nackBehavior: 'no-requeue'
+       retry();
+    }
+  },
+}, {
+  nackBehavior: 'no-requeue',      // Send to DLQ instead of requeuing
+  deadLetterQueueSuffix: '.dlq',   // Dead letter queue name suffix
+  retryAttempts: 1                 // Only try once, then send to DLQ
+});
+```
+
+### **Complete Consumer Options:**
+
+```typescript
+await rabbit.createConsumer({
+  queue: "my-queue",
+  // ... queue configuration options
+}, {
+  // Acknowledgment settings
+  ackMode: 'manual',                    // 'manual' or 'auto'
+  nackBehavior: 'no-requeue',          // 'requeue' or 'no-requeue' (default: 'no-requeue')
+  
+  // Performance settings
+  prefetch: 1,                        // Number of messages to prefetch
+  
+  // Retry settings
+  retryAttempts: 3,                   // Number of retry attempts for failed messages
+  retryDelayMs: 180000,              // Delay between retries (3 minutes)
+  
+  // Dead letter queue settings
+  deadLetterQueueSuffix: '.dlq',     // Suffix for dead letter queue names
+  
+  // Timeout settings
+  processingTimeout: 30000,          // Message processing timeout (30 seconds)
+  
+  // Error handling
+  errorHandler: (error, queueName, msg) => {
+    console.error(`Error processing message in ${queueName}:`, error);
+  },
+  
+  // Additional consumer options
+  consumerOptions: {
+    // amqplib consumer options
+  }
+});
+```
+
 ## **Simplified API**
 
 The library provides a simple Connection class with Consumer and Publisher instances for professional RabbitMQ usage:
@@ -324,11 +442,22 @@ import { ConsumeMessage } from 'amqplib';
 const consumer = new RabbitMQConsumer(queueManager);
 
 const consumerOptions: ConsumerOptions = {
-  prefetch: 5,                    // Process up to 5 messages concurrently
-  retryAttempts: 3,               // Retry failed messages up to 3 times
-  retryDelayMs: 5000,             // Wait 5 seconds between retries
-  deadLetterQueueSuffix: '.DLQ',  // Send to DLQ after retries exhausted
-  processingTimeout: 30000,       // Timeout message processing after 30s
+  // Acknowledgment settings
+  ackMode: 'manual',                // 'manual' (default) or 'auto' - controls who acknowledges messages
+  nackBehavior: 'no-requeue',      // 'requeue' or 'no-requeue' (default) - controls retry behavior
+  
+  // Performance settings
+  prefetch: 5,                     // Process up to 5 messages concurrently
+  
+  // Retry settings
+  retryAttempts: 3,                // Retry failed messages up to 3 times
+  retryDelayMs: 5000,              // Wait 5 seconds between retries
+  deadLetterQueueSuffix: '.DLQ',   // Send to DLQ after retries exhausted
+  
+  // Timeout settings
+  processingTimeout: 30000,        // Timeout message processing after 30s
+  
+  // Error handling
   errorHandler: (error, queueName, msg) => {
     console.error(`Error in ${queueName}:`, error.message);
     // Custom error handling logic
@@ -352,6 +481,35 @@ await consumer.consume(
     }
   },
   consumerOptions
+);
+```
+
+### Consumer with Auto-Acknowledgment (Less Reliable, Higher Performance)
+
+```typescript
+import { RabbitMQConsumer, ConsumerOptions } from 'rabbitmq-connect-helper';
+import { ConsumeMessage } from 'amqplib';
+
+const consumer = new RabbitMQConsumer(queueManager);
+
+const autoAckConsumerOptions: ConsumerOptions = {
+  ackMode: 'auto',                  // RabbitMQ auto-acknowledges messages
+  prefetch: 10,                     // Higher prefetch for better performance
+  processingTimeout: 10000,         // Timeout for message processing
+  errorHandler: (error, queueName, msg) => {
+    console.error(`Error in ${queueName}:`, error.message);
+    // Note: With auto-ack, there's no option to retry failed messages manually
+  }
+};
+
+await consumer.consume(
+  'log-queue',  // Queue for logs, telemetry, etc.
+  async (msg: ConsumeMessage, ack: () => void, retry: () => void) => {
+    // Process log message or telemetry data
+    console.log('Log received:', msg.content.toString());
+    // No need to manually acknowledge - RabbitMQ auto-acks when using ackMode: 'auto'
+  },
+  autoAckConsumerOptions
 );
 ```
 

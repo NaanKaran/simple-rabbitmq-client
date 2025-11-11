@@ -1,4 +1,4 @@
-const { Connection } = require('./dist/index.js');
+const { Connection } = require("./dist/index.js");
 
 async function startConsumer() {
   // =====================================================
@@ -11,17 +11,14 @@ async function startConsumer() {
   const QUEUE_NAME = "my-queue";
 
   // Use the correct overload for createConsumer
-  await rabbit.createConsumer(
-    QUEUE_NAME,
-    async (msg, ack, retry) => {
-      // =====================================================
-      // 📩 2. Handle Incoming Messages
-      // =====================================================
-      console.log(`[✓] Received message: ${msg.content.toString()}`);
-      // Acknowledge the message
-      await ack();
-    }
-  );
+  await rabbit.createConsumer(QUEUE_NAME, async (msg, ack, retry) => {
+    // =====================================================
+    // 📩 2. Handle Incoming Messages
+    // =====================================================
+    console.log(`[✓] Received message: ${msg.content.toString()}`);
+    // Acknowledge the message
+    await ack();
+  });
 
   rabbit.on("error", (err) => {
     console.log("RabbitMQ connection error", err);

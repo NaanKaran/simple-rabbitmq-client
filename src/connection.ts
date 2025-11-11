@@ -480,7 +480,7 @@ export class Consumer extends EventEmitter {
           } catch (error) {
             this.emit("error", error);
             // On error, we can retry or potentially send to DLQ based on configuration
-            await retry();
+            retry();
           }
         },
         consumerOptions
@@ -556,6 +556,11 @@ export class Connection extends EventEmitter {
    * Overloads:
    * - createConsumer(queueName, onMessage, options?) -> Promise<void>
    * - createConsumer(config, handler) -> Promise<Consumer>
+   * - createConsumer({queue, onMessage}, options?) -> Promise<void> (object-based signature)
+   *
+   * Consumer Options:
+   * - ackMode: 'auto' (RabbitMQ auto-acks, less reliable) or 'manual' (you control acks, reliable) - default: 'manual'
+   * - nackBehavior: 'requeue' (for temporary failures) or 'no-requeue' (send to DLQ for permanent failures) - default: 'requeue'
    */
   async createConsumer(
     queueName: string,
@@ -573,14 +578,37 @@ export class Connection extends EventEmitter {
   ): Promise<Consumer>;
 
   async createConsumer(
-    arg1: string | EnhancedConsumerOptionsBase,
+    config: {
+      queue: string;
+      onMessage: (
+        msg: ConsumeMessage,
+        ack: () => void,
+        retry: () => void
+      ) => Promise<void>;
+    },
+    options?: ConsumerOptions
+  ): Promise<void>;
+
+  async createConsumer(
+    arg1:
+      | string
+      | EnhancedConsumerOptionsBase
+      | {
+          queue: string;
+          onMessage: (
+            msg: ConsumeMessage,
+            ack: () => void,
+            retry: () => void
+          ) => Promise<void>;
+        },
     arg2?:
       | ((msg: any) => Promise<void | number>)
       | ((
           msg: ConsumeMessage,
           ack: () => void,
           retry: () => void
-        ) => Promise<void>),
+        ) => Promise<void>)
+      | ConsumerOptions,
     arg3?: ConsumerOptions
   ): Promise<Consumer | void> {
     // If first arg is a string, route to the low-level consumer.consume
@@ -595,6 +623,26 @@ export class Connection extends EventEmitter {
 
       const consumer = new RabbitMQConsumer(this.queueManager);
       return await consumer.consume(queueName, onMessage, options);
+    }
+    // If first arg has 'queue' and 'onMessage' properties, it's the object-based signature
+    else if (
+      arg1 &&
+      typeof arg1 === "object" &&
+      "queue" in arg1 &&
+      "onMessage" in arg1
+    ) {
+      const config = arg1 as {
+        queue: string;
+        onMessage: (
+          msg: ConsumeMessage,
+          ack: () => void,
+          retry: () => void
+        ) => Promise<void>;
+      };
+      const options = (arg2 as ConsumerOptions | undefined) || {};
+
+      const consumer = new RabbitMQConsumer(this.queueManager);
+      return await consumer.consume(config.queue, config.onMessage, options);
     } else {
       // Otherwise treat as enhanced consumer creation
       const config = arg1 as EnhancedConsumerOptionsBase;

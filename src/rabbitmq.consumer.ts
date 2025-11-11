@@ -27,6 +27,18 @@ export interface ConsumerOptions {
   ) => void;
   /** Timeout for message processing in ms (default: 30000) */
   processingTimeout?: number;
+  /**
+   * Acknowledgment mode:
+   * - 'auto' - RabbitMQ auto-acks messages (no manual control, less reliable)
+   * - 'manual' - Consumer manually acknowledges/nacks messages (default, reliable)
+   */
+  ackMode?: "auto" | "manual";
+  /**
+   * Behavior when nack is called:
+   * - 'requeue' - Requeue the message (for temporary failures)
+   * - 'no-requeue' - Don't requeue, send to DLQ instead (default, for permanent failures)
+   */
+  nackBehavior?: "requeue" | "no-requeue";
 }
 
 /**
@@ -92,6 +104,8 @@ export class RabbitMQConsumer {
       deadLetterQueueSuffix = DEFAULT_DEAD_LETTER_QUEUE_SUFFIX,
       errorHandler,
       processingTimeout = DEFAULT_PROCESSING_TIMEOUT_MS,
+      ackMode = "manual", // Default to manual for reliability
+      nackBehavior = "no-requeue", // Default to no-requeue (send to DLQ) for failed messages
     } = options;
 
     const setupConsumer = async () => {
@@ -109,16 +123,22 @@ export class RabbitMQConsumer {
           retryDelayMs,
           deadLetterQueueSuffix,
           errorHandler,
-          processingTimeout
+          processingTimeout,
+          ackMode,
+          nackBehavior
         );
+
+        // Set up consumer with appropriate acknowledgment settings
+        const actualConsumeOptions = {
+          ...CONSUME_OPTIONS,
+          noAck: ackMode === "auto", // If auto-ack, set noAck to true
+          ...consumerOptions,
+        };
 
         const { consumerTag } = await channel.consume(
           queueName,
           consumeHandler,
-          {
-            ...CONSUME_OPTIONS,
-            ...consumerOptions,
-          }
+          actualConsumeOptions
         );
 
         // Save the stop method
@@ -220,15 +240,20 @@ export class RabbitMQConsumer {
       queueName: string,
       msg: ConsumeMessage | null
     ) => void,
-    processingTimeout: number = DEFAULT_PROCESSING_TIMEOUT_MS
+    processingTimeout: number = DEFAULT_PROCESSING_TIMEOUT_MS,
+    ackMode: "auto" | "manual" = "manual",
+    nackBehavior: "requeue" | "no-requeue" = "requeue"
   ) {
     return (msg: ConsumeMessage | null) => {
       if (!msg || this.pausedQueues.has(queueName)) return;
 
-      // Create safe acknowledgment function
-      const ack = this.createAckFunction(channel, queueName, msg);
+      // Create safe acknowledgment function (only if not in auto-ack mode)
+      const ack =
+        ackMode === "manual"
+          ? this.createAckFunction(channel, queueName, msg)
+          : () => {}; // No-op function for auto-ack mode
 
-      // Create retry function
+      // Create retry function with nack behavior
       const retry = this.createRetryFunction(
         queueName,
         channel,
@@ -237,35 +262,52 @@ export class RabbitMQConsumer {
         retryAttempts,
         retryDelayMs,
         deadLetterQueueSuffix,
-        errorHandler
+        errorHandler,
+        nackBehavior
       );
 
       // Process the message with timeout
-      this.processMessageWithTimeout(
-        queueName,
-        channel,
-        msg,
-        onMessage,
-        ack,
-        retry,
-        processingTimeout,
-        errorHandler
-      ).catch((error) => {
-        const typedError =
-          error instanceof Error ? error : new Error(String(error));
-        console.error(
-          `Unexpected error processing message in ${queueName}:`,
-          typedError
-        );
+      // Skip processing if in auto-ack mode (RabbitMQ already acked it)
+      if (ackMode === "auto") {
+        // For auto-ack, just call onMessage without manual ack/retry control
+        onMessage(msg, ack, retry).catch((error) => {
+          const typedError =
+            error instanceof Error ? error : new Error(String(error));
+          console.error(`Error in auto-ack mode for ${queueName}:`, typedError);
+          if (errorHandler) {
+            errorHandler(typedError, queueName, msg);
+          }
+        });
+      } else {
+        // For manual-ack, use full timeout and error handling logic
+        this.processMessageWithTimeout(
+          queueName,
+          channel,
+          msg,
+          onMessage,
+          ack,
+          retry,
+          processingTimeout,
+          errorHandler,
+          ackMode,
+          nackBehavior
+        ).catch((error) => {
+          const typedError =
+            error instanceof Error ? error : new Error(String(error));
+          console.error(
+            `Unexpected error processing message in ${queueName}:`,
+            typedError
+          );
 
-        if (errorHandler) {
-          errorHandler(typedError, queueName, msg);
-        }
+          if (errorHandler) {
+            errorHandler(typedError, queueName, msg);
+          }
 
-        // In case of unexpected errors, attempt retry
-        // Note: The retry function is synchronous and doesn't return a promise
-        retry();
-      });
+          // In case of unexpected errors, attempt retry
+          // Note: The retry function is synchronous and doesn't return a promise
+          retry();
+        });
+      }
     };
   }
 
@@ -316,13 +358,14 @@ export class RabbitMQConsumer {
       error: Error,
       queueName: string,
       msg: ConsumeMessage | null
-    ) => void
+    ) => void,
+    nackBehavior: "requeue" | "no-requeue" = "requeue"
   ): () => void {
     return () => {
       const attempt = (this.messageAttempts.get(msg) ?? 0) + 1;
       this.messageAttempts.set(msg, attempt);
 
-      if (attempt <= retryAttempts) {
+      if (attempt <= retryAttempts && nackBehavior === "requeue") {
         console.warn(`Retry ${attempt}/${retryAttempts} for ${queueName}`);
         setTimeout(() => {
           // Re-try by calling the same handler
@@ -334,13 +377,16 @@ export class RabbitMQConsumer {
             retryDelayMs,
             deadLetterQueueSuffix,
             errorHandler,
-            DEFAULT_PROCESSING_TIMEOUT_MS
+            DEFAULT_PROCESSING_TIMEOUT_MS,
+            "manual", // Use manual ack mode for retry logic
+            nackBehavior
           )(msg);
         }, retryDelayMs);
       } else {
+        // If nackBehavior is 'no-requeue' or we've exceeded retry attempts, move to DLQ
         this.metrics[queueName].errors++;
         console.error(
-          `Message moved to DLQ after ${retryAttempts} attempts: ${queueName}`
+          `Message moved to DLQ after ${attempt} attempts: ${queueName}`
         );
 
         this.moveToDLQWithErrorHandling(
@@ -375,7 +421,9 @@ export class RabbitMQConsumer {
       error: Error,
       queueName: string,
       msg: ConsumeMessage | null
-    ) => void
+    ) => void,
+    ackMode: "auto" | "manual" = "manual",
+    nackBehavior: "requeue" | "no-requeue" = "requeue"
   ): Promise<void> {
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(
@@ -391,7 +439,9 @@ export class RabbitMQConsumer {
       // Race between message processing and timeout
       await Promise.race([onMessage(msg, ack, retry), timeoutPromise]);
       // If we get here, processing completed successfully
-      // ack();
+      if (ackMode === "manual") {
+        ack(); // Only ack manually if in manual mode
+      }
     } catch (error) {
       const typedError =
         error instanceof Error ? error : new Error(String(error));
@@ -413,6 +463,7 @@ export class RabbitMQConsumer {
           errorHandler
         );
       } else {
+        // Use the retry with the specified nackBehavior
         retry();
       }
     }
